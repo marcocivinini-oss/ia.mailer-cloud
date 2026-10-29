@@ -406,26 +406,13 @@
   $("previewFor").onchange = refreshPreview;
 
   // ---------- invio ----------
-  // Messaggio MIME → base64url (formato "raw" della Gmail API)
-  function toB64Url(str) {
-    const bytes = new TextEncoder().encode(str);
-    let bin = "";
-    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  }
   async function sendOne(msg) {
     const mime = M.buildMime(msg);
-    // Messaggi normali: endpoint JSON standard, che il browser legge senza problemi.
-    // Messaggi molto grandi (allegati pesanti): endpoint di upload su www.googleapis.com.
-    // (L'upload su gmail.googleapis.com consegnava l'email ma il browser non poteva leggere
-    //  la risposta: "Failed to fetch", con il rischio di reinvii doppi.)
-    const big = mime.length > 4500000;
-    const url = big
-      ? "https://www.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media"
-      : "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
-    const opts = big
-      ? { method: "POST", headers: { "Content-Type": "message/rfc822" }, body: mime }
-      : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ raw: toB64Url(mime) }) };
+    // L'email viene consegnata al server del Mailer, che la invia tramite Gmail con il token
+    // dell'utente: parte comunque dalla sua casella. (Le chiamate dirette dal browser a Gmail
+    // spedivano l'email ma la risposta veniva bloccata: "Failed to fetch".)
+    const url = "/.netlify/functions/invia";
+    const opts = { method: "POST", headers: { "Content-Type": "message/rfc822" }, body: mime };
     for (let attempt = 0; attempt < 4; attempt++) {
       const r = await gfetch(url, opts);
       if (r.ok) return (await r.json()).id;
