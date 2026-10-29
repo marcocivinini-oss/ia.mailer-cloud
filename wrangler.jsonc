@@ -1,0 +1,31 @@
+{
+  // IA Mailer — invio di newsletter e mailing dalla casella Google di ogni advisor
+  "name": "ia-mailer",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "mailer.ia-advisors-hub.com", "custom_domain": true }
+  ],
+
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/.netlify/*", "/disiscrizione", "/disiscrizione/*", "/config.js"]
+  },
+
+  // Il codice originale usa "@netlify/blobs": qui viene sostituito dall'archivio R2.
+  "alias": { "@netlify/blobs": "./worker/blobs-shim.js" },
+
+  // Registro condiviso: disiscritti, storico invii, campagne
+  "r2_buckets": [ { "binding": "DATA", "bucket_name": "ia-mailer-data" } ],
+
+  "vars": {
+    "URL": "https://mailer.ia-advisors-hub.com",
+    "ALLOWED_DOMAINS": "iainternationaladvisors.com"
+  }
+  // Da impostare nel pannello Cloudflare: GOOGLE_CLIENT_ID (Text), UNSUBSCRIBE_SECRET e HUBSPOT_TOKEN (Secret)
+}

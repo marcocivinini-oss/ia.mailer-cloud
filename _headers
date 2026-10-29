@@ -1,0 +1,4 @@
+/*
+  Content-Security-Policy: frame-ancestors 'self' https://ia-advisors-hub.com https://*.ia-advisors-hub.com https://*.iainternationaladvisors.com
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Content-Type-Options: nosniff

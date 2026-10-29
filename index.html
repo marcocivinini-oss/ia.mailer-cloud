@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>IA Mailer</title>
+<link rel="icon" href="assets/logo-email.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+<header class="topbar">
+  <img src="assets/logo-email.png" alt="International Advisors" class="logo">
+  <div class="title"><span>IA Mailer</span><small>Newsletter e mailing dalla tua casella</small></div>
+  <div id="userBox" class="user"></div>
+  <a class="portal-back" href="https://ia-advisors-hub.com/">&larr; Portale</a>
+</header>
+
+<main>
+  <!-- 1. MITTENTE -->
+  <section class="card" id="sec-sender">
+    <h2><b>1</b> Mittente</h2>
+    <div id="loginArea">
+      <p class="muted">Accedi con l'account Google da cui vuoi inviare (personale o casella dedicata). Le email partono dalla tua casella e restano nella cartella Inviati.</p>
+      <button id="btnLogin" class="btn primary">Accedi con Google</button>
+    </div>
+    <div id="senderArea" class="grid2 hidden">
+      <label>Indirizzo mittente
+        <select id="fromAddress"></select>
+      </label>
+      <label>Nome visualizzato
+        <input id="fromName" placeholder="Es. Marco Civinini – IA International Advisors">
+      </label>
+      <label>Rispondi a (facoltativo)
+        <input id="replyTo" type="email" placeholder="Lascia vuoto per usare il mittente">
+      </label>
+      <label>Firma (nome e ruolo, appare in fondo)
+        <textarea id="signature" rows="3" placeholder="Marco Civinini&#10;CEO, IA International Advisors"></textarea>
+      </label>
+    </div>
+  </section>
+
+  <!-- 2. CONTENUTO -->
+  <section class="card" id="sec-content">
+    <h2><b>2</b> Contenuto</h2>
+    <div class="grid2">
+      <label>Oggetto
+        <input id="subject" placeholder="Es. {{Nome}}, le novità IA di novembre">
+      </label>
+      <label>Anteprima nella inbox (preheader, facoltativo)
+        <input id="preheader" placeholder="Breve frase mostrata accanto all'oggetto">
+      </label>
+    </div>
+
+    <div class="tabs" data-group="mode">
+      <button class="tab active" data-tab="text">Testo</button>
+      <button class="tab" data-tab="canva">Da Canva (immagini)</button>
+      <button class="tab" data-tab="html">HTML</button>
+    </div>
+
+    <div class="tabpane" data-pane="text">
+      <div class="toolbar" id="toolbar">
+        <button data-cmd="bold" title="Grassetto"><b>G</b></button>
+        <button data-cmd="italic" title="Corsivo"><i>C</i></button>
+        <button data-cmd="underline" title="Sottolineato"><u>S</u></button>
+        <button data-cmd="h2" title="Titolo">Titolo</button>
+        <button data-cmd="p" title="Paragrafo">¶</button>
+        <button data-cmd="insertUnorderedList" title="Elenco">• Elenco</button>
+        <button data-cmd="link" title="Link">Link</button>
+        <button data-cmd="removeFormat" title="Pulisci formato">Pulisci</button>
+        <select id="mergeInsert" title="Inserisci campo"><option value="">+ Campo personalizzato</option></select>
+      </div>
+      <div id="editor" class="editor" contenteditable="true">
+        <p>Gentile {{Nome|cliente}},</p>
+        <p>scrivi qui il testo della comunicazione. Puoi incollare un testo da Word o da Canva: la formattazione di base viene mantenuta.</p>
+      </div>
+    </div>
+
+    <div class="tabpane hidden" data-pane="canva">
+      <p class="muted">Da Canva scarica il design come <b>PNG o JPG</b> (una immagine per pagina) e caricalo qui. Le immagini vengono ottimizzate e inserite nel corpo dell'email nell'ordine indicato. Puoi aggiungere un testo introduttivo, un link per ogni immagine e il PDF come allegato.</p>
+      <label>Testo introduttivo (facoltativo, supporta {{campi}})
+        <textarea id="canvaIntro" rows="3" placeholder="Gentile {{Nome|cliente}}, le inviamo la nostra newsletter di novembre."></textarea>
+      </label>
+      <label class="file">Immagini esportate da Canva
+        <input type="file" id="canvaImages" accept="image/png,image/jpeg" multiple>
+      </label>
+      <div id="canvaList" class="imglist"></div>
+      <label>Link "Visualizza online" (facoltativo, es. link di condivisione Canva)
+        <input id="canvaWebLink" type="url" placeholder="https://www.canva.com/design/...">
+      </label>
+    </div>
+
+    <div class="tabpane hidden" data-pane="html">
+      <p class="muted">Incolla l'HTML di una newsletter già pronta (es. esportazione HTML da Canva o da altri strumenti). Supporta i {{campi}}.</p>
+      <textarea id="htmlSource" rows="10" class="mono" placeholder="&lt;table&gt;...&lt;/table&gt;"></textarea>
+    </div>
+
+    <div class="grid2 mt">
+      <label class="check"><input type="checkbox" id="useTemplate" checked> Usa la cornice grafica IA (logo, firma, footer)</label>
+      <label class="check"><input type="checkbox" id="addUnsub" checked> Aggiungi la riga di disiscrizione (consigliato, GDPR)</label>
+    </div>
+
+    <div class="row mt">
+      <label class="check"><input type="checkbox" id="ctaOn"> Pulsante di invito all'azione</label>
+      <input id="ctaText" placeholder="Testo pulsante, es. Prenota una call" class="grow">
+      <input id="ctaUrl" type="url" placeholder="https://..." class="grow">
+    </div>
+
+    <label class="file mt">Allegati (facoltativi, max 15 MB in totale — es. PDF da Canva)
+      <input type="file" id="attachments" multiple>
+    </label>
+    <div id="attList" class="chips"></div>
+  </section>
+
+  <!-- 3. DESTINATARI -->
+  <section class="card" id="sec-recipients">
+    <h2><b>3</b> Destinatari</h2>
+    <div class="tabs" data-group="source">
+      <button class="tab active" data-tab="file">Excel / CSV</button>
+      <button class="tab" data-tab="hubspot" id="tabHubspot">HubSpot</button>
+      <button class="tab" data-tab="paste">Incolla elenco</button>
+    </div>
+
+    <div class="tabpane" data-pane="file">
+      <p class="muted">Il file deve avere una colonna con l'email (es. "Email"). Le altre colonne (Nome, Cognome, Azienda…) diventano campi personalizzati: <code>{{Nome}}</code>, <code>{{Azienda}}</code>.</p>
+      <label class="file"><input type="file" id="recFile" accept=".csv,.xlsx,.xls,.txt"></label>
+    </div>
+
+    <div class="tabpane hidden" data-pane="hubspot">
+      <p class="muted">Cerca una lista di contatti HubSpot. I contatti che hanno revocato il consenso alle email vengono esclusi automaticamente.</p>
+      <div class="row">
+        <input id="hsQuery" placeholder="Nome della lista" class="grow">
+        <button id="btnHsSearch" class="btn">Cerca liste</button>
+      </div>
+      <div id="hsLists" class="hslists"></div>
+    </div>
+
+    <div class="tabpane hidden" data-pane="paste">
+      <p class="muted">Un destinatario per riga: <code>email</code> oppure <code>email; Nome; Azienda</code></p>
+      <textarea id="pasteList" rows="6" class="mono"></textarea>
+      <button id="btnPaste" class="btn">Carica elenco</button>
+    </div>
+
+    <details class="mt">
+      <summary>Esclusioni (disiscritti, concorrenti, ecc.)</summary>
+      <p class="muted">Indirizzi o domini da non contattare, uno per riga (es. <code>mario@azienda.it</code> o <code>@concorrente.com</code>). Vengono ricordati in questo browser.</p>
+      <textarea id="exclusions" rows="4" class="mono"></textarea>
+    </details>
+
+    <div class="row mt">
+      <label class="grow">Escludi chi ha già ricevuto una nostra email negli ultimi
+        <select id="recentDays">
+          <option value="0">— non escludere —</option>
+          <option value="7">7 giorni</option>
+          <option value="14">14 giorni</option>
+          <option value="30">30 giorni</option>
+          <option value="90">90 giorni</option>
+        </select>
+      </label>
+      <label class="check grow"><input type="checkbox" id="skipSameSubject" checked> Escludi chi ha già ricevuto un'email con lo stesso oggetto</label>
+    </div>
+
+    <div id="recSummary" class="summary hidden"></div>
+    <div id="recTableWrap" class="tablewrap hidden"><table id="recTable"></table></div>
+  </section>
+
+  <!-- 4. ANTEPRIMA E INVIO -->
+  <section class="card" id="sec-send">
+    <h2><b>4</b> Anteprima e invio</h2>
+    <div class="row">
+      <label class="grow">Anteprima per
+        <select id="previewFor"><option value="-1">Destinatario di esempio</option></select>
+      </label>
+      <button id="btnPreview" class="btn">Aggiorna anteprima</button>
+    </div>
+    <div class="previewSubject" id="previewSubject"></div>
+    <iframe id="previewFrame" title="Anteprima email"></iframe>
+
+    <div class="row mt">
+      <input id="testTo" type="email" placeholder="Email per l'invio di prova" class="grow">
+      <button id="btnTest" class="btn">Invia prova</button>
+    </div>
+
+    <div class="sendbox">
+      <div id="sendInfo" class="muted">Carica i destinatari per abilitare l'invio.</div>
+      <div class="row">
+        <button id="btnSend" class="btn primary" disabled>Invia a tutti</button>
+        <button id="btnPause" class="btn hidden">Pausa</button>
+        <button id="btnStop" class="btn hidden">Interrompi</button>
+        <button id="btnRetry" class="btn hidden">Riprova falliti</button>
+        <button id="btnReport" class="btn hidden">Scarica report</button>
+      </div>
+      <div class="progress hidden" id="progress"><div id="progressBar"></div></div>
+      <div id="progressText" class="muted"></div>
+      <div id="log" class="log"></div>
+    </div>
+  </section>
+
+  <!-- 5. REGISTRO -->
+  <section class="card" id="sec-registry">
+    <h2><b>5</b> Registro condiviso</h2>
+    <p class="muted">Storico di tutti gli invii e dei disiscritti, comune a tutti gli advisor. I disiscritti vengono esclusi automaticamente da ogni invio futuro.</p>
+    <div class="tabs" data-group="registry">
+      <button class="tab active" data-tab="campaigns">Campagne inviate</button>
+      <button class="tab" data-tab="unsubs">Disiscritti</button>
+    </div>
+    <div class="tabpane" data-pane="campaigns">
+      <div class="row"><button id="btnLoadCampaigns" class="btn">Aggiorna</button></div>
+      <div class="tablewrap mt"><table id="campTable"><tr><td class="muted">Accedi per vedere lo storico</td></tr></table></div>
+    </div>
+    <div class="tabpane hidden" data-pane="unsubs">
+      <div class="row">
+        <input id="unsubSearch" placeholder="Cerca indirizzo" class="grow">
+        <button id="btnLoadUnsubs" class="btn">Aggiorna</button>
+        <button id="btnExportUnsubs" class="btn">Esporta CSV</button>
+      </div>
+      <div class="tablewrap mt"><table id="unsubTable"></table></div>
+      <details class="mt">
+        <summary>Aggiungi disiscritti a mano (es. chi ha risposto «CANCELLAMI»)</summary>
+        <textarea id="unsubAdd" rows="3" class="mono mt" placeholder="Un indirizzo per riga"></textarea>
+        <button id="btnUnsubAdd" class="btn mt">Segna come disiscritti</button>
+      </details>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+<script src="mailer-core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

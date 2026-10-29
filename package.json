@@ -1,0 +1,6 @@
+{
+  "name": "ia-mailer-cloud",
+  "private": true,
+  "type": "module",
+  "devDependencies": { "wrangler": "^4.40.0" }
+}
