@@ -1,8 +1,7 @@
 // Funzione Netlify: registro centrale condiviso di invii e disiscrizioni (Netlify Blobs).
 // Archivi: "disiscritti" (chiave = email), "invii" (storico per email), "campagne" (metadati + destinatari).
-import { json, verifyGoogle, getStore, keyOf, emailOf, normEmail, listAll, pool, addUnsubscribe, unsubscribeUrl } from "../lib/common.mjs";
+import { json, verifyGoogle, getStore, keyOf, emailOf, normEmail, listAll, pool, addUnsubscribe, unsubscribeUrl, logSends } from "../lib/common.mjs";
 
-const MAX_HISTORY = 100;
 const newId = () => new Date().toISOString().replace(/[-:T]/g, "").slice(0, 12) + "-" + Math.random().toString(36).slice(2, 7);
 
 export default async (req) => {
@@ -12,24 +11,25 @@ export default async (req) => {
   let body;
   try { body = await req.json(); } catch { return json(400, { error: "Richiesta non valida" }); }
   const base = process.env.URL || new URL(req.url).origin;
-  const unsubStore = getStore("disiscritti"), sendStore = getStore("invii"), campStore = getStore("campagne");
+  const unsubStore = getStore("disiscritti"), sendStore = getStore("invii"), campStore = getStore("campagne"), norecStore = getStore("nonrecapitabili");
 
   try {
     switch (body.action) {
       // Stato di una lista di destinatari: disiscritti e storico invii
       case "check": {
         const emails = [...new Set((body.emails || []).map(normEmail))].slice(0, 5000);
-        const unsubKeys = new Set(await listAll(unsubStore));
-        const unsubscribed = {}, history = {};
+        const unsubKeys = new Set(await listAll(unsubStore)), norecKeys = new Set(await listAll(norecStore));
+        const unsubscribed = {}, history = {}, bounced = {};
         await pool(emails, 25, async (e) => {
           if (unsubKeys.has(keyOf(e))) unsubscribed[e] = await unsubStore.get(keyOf(e), { type: "json" });
+          if (norecKeys.has(keyOf(e))) bounced[e] = true;
           const h = await sendStore.get(keyOf(e), { type: "json" });
           if (h && h.sends && h.sends.length) {
             const last = h.sends[h.sends.length - 1];
             history[e] = { count: h.sends.length, last, subjects: h.sends.map((s) => s.s) };
           }
         });
-        return json(200, { unsubscribed, history });
+        return json(200, { unsubscribed, history, bounced });
       }
 
       // Apre una campagna e restituisce i link di disiscrizione personali
@@ -47,22 +47,8 @@ export default async (req) => {
 
       // Registra l'esito di un blocco di invii
       case "log": {
-        const id = body.campaignId, results = body.results || [];
-        const meta = await campStore.get(id, { type: "json" });
+        const meta = await logSends(body.campaignId, body.results || []);
         if (!meta) return json(404, { error: "Campagna non trovata" });
-        await pool(results.filter((r) => r.status === "ok"), 20, async (r) => {
-          const k = keyOf(r.email), h = (await sendStore.get(k, { type: "json" })) || { email: normEmail(r.email), sends: [] };
-          h.sends.push({ c: id, s: meta.subject, f: meta.sender, t: r.time || new Date().toISOString() });
-          h.sends = h.sends.slice(-MAX_HISTORY);
-          await sendStore.setJSON(k, h);
-        });
-        const rec = (await campStore.get(id + "/destinatari", { type: "json" })) || [];
-        results.forEach((r) => rec.push({ e: normEmail(r.email), st: r.status, t: r.time, err: r.error || "", id: r.id || "" }));
-        meta.ok += results.filter((r) => r.status === "ok").length;
-        meta.ko += results.filter((r) => r.status !== "ok").length;
-        meta.updatedAt = new Date().toISOString();
-        await campStore.setJSON(id + "/destinatari", rec);
-        await campStore.setJSON(id, meta);
         return json(200, { ok: true, meta });
       }
 
@@ -96,6 +82,20 @@ export default async (req) => {
       case "unsubscribe-remove": {
         await unsubStore.delete(keyOf(body.email));
         console.log(`[ia-mailer] ${user} ha riattivato ${normEmail(body.email)}`);
+        return json(200, { ok: true });
+      }
+
+      // Indirizzi non recapitabili (rilevati dalle campagne graduali)
+      case "nonrecapitabili": {
+        const keys = await listAll(norecStore);
+        const recs = (await pool(keys, 25, (k) => norecStore.get(k, { type: "json" }))).map((r, i) => r || { email: emailOf(keys[i]) });
+        recs.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+        return json(200, { bounced: recs });
+      }
+
+      case "nonrecapitabili-remove": {
+        await norecStore.delete(keyOf(body.email));
+        console.log(`[ia-mailer] ${user} ha riattivato l'indirizzo non recapitabile ${normEmail(body.email)}`);
         return json(200, { ok: true });
       }
 

@@ -186,27 +186,68 @@
     </div>
 
     <div class="sendbox">
-      <div id="sendInfo" class="muted">Carica i destinatari per abilitare l'invio.</div>
-      <div class="row">
-        <button id="btnSend" class="btn primary" disabled>Invia a tutti</button>
-        <button id="btnPause" class="btn hidden">Pausa</button>
-        <button id="btnStop" class="btn hidden">Interrompi</button>
-        <button id="btnRetry" class="btn hidden">Riprova falliti</button>
-        <button id="btnReport" class="btn hidden">Scarica report</button>
+      <div class="tabs" data-group="sendmode">
+        <button class="tab active" data-tab="gradual" id="tabGradual">Graduale, a tappe</button>
+        <button class="tab" data-tab="now" id="tabNow">Tutto subito</button>
       </div>
-      <div class="progress hidden" id="progress"><div id="progressBar"></div></div>
-      <div id="progressText" class="muted"></div>
-      <div id="log" class="log"></div>
+
+      <div class="tabpane" data-pane="gradual">
+        <p class="muted">Per le liste grandi: il Mailer invia ogni giorno una parte della lista, con volumi che crescono poco alla volta, solo nei giorni e negli orari scelti e alternando le aziende. Ogni giorno lavorativo apri il Mailer e premi <b>Invia la tappa di oggi</b> nella sezione 5.</p>
+        <div class="grid4">
+          <label>Primo giorno (email)<input type="number" id="gStart" min="5" max="1500" value="50"></label>
+          <label>Aumento al giorno<input type="number" id="gStep" min="0" max="500" value="25"></label>
+          <label>Massimo al giorno<input type="number" id="gMax" min="5" max="1500" value="200"></label>
+          <label>Massimo per azienda al giorno<input type="number" id="gPerDomain" min="1" max="100" value="2"></label>
+          <label>Invia dalle<input type="time" id="gWinStart" value="09:00"></label>
+          <label>alle<input type="time" id="gWinEnd" value="17:30"></label>
+          <label>Ora dei destinatari<select id="gTz"></select></label>
+          <label>Pausa tra email (secondi)<span class="pair"><input type="number" id="gGapMin" min="2" max="600" value="6"><span>–</span><input type="number" id="gGapMax" min="2" max="900" value="15"></span></label>
+        </div>
+        <div class="days mt" id="gDays"></div>
+        <div id="gEstimate" class="summary">Carica i destinatari per vedere la durata della campagna.</div>
+        <div class="row mt"><button id="btnPlan" class="btn primary" disabled>Crea campagna graduale</button></div>
+      </div>
+
+      <div class="tabpane hidden" data-pane="now">
+        <div id="sendInfo" class="muted">Carica i destinatari per abilitare l'invio.</div>
+        <div class="row">
+          <button id="btnSend" class="btn primary" disabled>Invia a tutti</button>
+          <button id="btnPause" class="btn hidden">Pausa</button>
+          <button id="btnStop" class="btn hidden">Interrompi</button>
+          <button id="btnRetry" class="btn hidden">Riprova falliti</button>
+          <button id="btnReport" class="btn hidden">Scarica report</button>
+        </div>
+        <div class="progress hidden" id="progress"><div id="progressBar"></div></div>
+        <div id="progressText" class="muted"></div>
+        <div id="log" class="log"></div>
+      </div>
     </div>
   </section>
 
-  <!-- 5. REGISTRO -->
+  <!-- 5. CAMPAGNE GRADUALI -->
+  <section class="card" id="sec-plans">
+    <h2><b>5</b> Campagne graduali</h2>
+    <p class="muted">Le campagne a tappe del team. Solo chi ha creato una campagna può inviarla, perché le email partono dalla sua casella. Prima di ogni tappa il Mailer controlla la casella: segna le risposte, esclude gli indirizzi non recapitabili e sospende la campagna se i mancati recapiti superano il 5%.</p>
+    <div class="row"><button id="btnLoadPlans" class="btn">Aggiorna</button></div>
+    <div id="planList" class="plans mt"><p class="muted">Accedi con Google per vedere le campagne.</p></div>
+    <div id="planSession" class="sendbox hidden">
+      <div id="planSessionTitle" class="sessiontitle"></div>
+      <div id="renewBox" class="renew hidden">L'accesso a Google sta per scadere: l'invio è in attesa. <button id="btnRenew" class="btn primary">Rinnova accesso e continua</button></div>
+      <div class="row"><button id="btnPlanPause" class="btn">Pausa</button><button id="btnPlanStop" class="btn">Interrompi</button></div>
+      <div class="progress" id="planProgress"><div id="planProgressBar"></div></div>
+      <div id="planProgressText" class="muted"></div>
+      <div id="planLog" class="log"></div>
+    </div>
+  </section>
+
+  <!-- 6. REGISTRO -->
   <section class="card" id="sec-registry">
-    <h2><b>5</b> Registro condiviso</h2>
+    <h2><b>6</b> Registro condiviso</h2>
     <p class="muted">Storico di tutti gli invii e dei disiscritti, comune a tutti gli advisor. I disiscritti vengono esclusi automaticamente da ogni invio futuro.</p>
     <div class="tabs" data-group="registry">
       <button class="tab active" data-tab="campaigns">Campagne inviate</button>
       <button class="tab" data-tab="unsubs">Disiscritti</button>
+      <button class="tab" data-tab="bounced">Non recapitabili</button>
     </div>
     <div class="tabpane" data-pane="campaigns">
       <div class="row"><button id="btnLoadCampaigns" class="btn">Aggiorna</button></div>
@@ -224,6 +265,11 @@
         <textarea id="unsubAdd" rows="3" class="mono mt" placeholder="Un indirizzo per riga"></textarea>
         <button id="btnUnsubAdd" class="btn mt">Segna come disiscritti</button>
       </details>
+    </div>
+    <div class="tabpane hidden" data-pane="bounced">
+      <p class="muted">Indirizzi per cui è arrivato un messaggio di mancato recapito durante una campagna graduale: vengono esclusi da tutti gli invii futuri. Riattiva un indirizzo solo se sei sicuro che sia corretto.</p>
+      <div class="row"><button id="btnLoadBounced" class="btn">Aggiorna</button></div>
+      <div class="tablewrap mt"><table id="bouncedTable"></table></div>
     </div>
   </section>
 </main>

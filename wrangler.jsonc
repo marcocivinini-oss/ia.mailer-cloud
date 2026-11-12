@@ -25,7 +25,9 @@
 
   "vars": {
     "URL": "https://mailer.ia-advisors-hub.com",
-    "ALLOWED_DOMAINS": "iainternationaladvisors.com"
+    "ALLOWED_DOMAINS": "iainternationaladvisors.com",
+    // Campagne graduali: tetto giornaliero di sicurezza per casella (Google Workspace ne consente 2.000)
+    "MAILBOX_DAILY_CAP": "1500"
   }
   // Da impostare nel pannello Cloudflare: GOOGLE_CLIENT_ID (Text), UNSUBSCRIBE_SECRET e HUBSPOT_TOKEN (Secret)
 }

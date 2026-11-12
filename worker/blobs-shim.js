@@ -33,3 +33,15 @@ export function getStore(opts) {
     },
   };
 }
+
+// Accesso diretto ai file di un archivio: per contenuti grandi che il server salva e restituisce
+// così come sono, senza rielaborarli (meno tempo di calcolo per ogni richiesta).
+export function rawStore(name) {
+  if (!BUCKET) throw new Error("Archivio non collegato");
+  const p = name + "/", b = BUCKET;
+  return {
+    put: (key, body, opts) => b.put(p + key, body, opts),
+    get: (key) => b.get(p + key),
+    delete: (key) => b.delete(p + key),
+  };
+}

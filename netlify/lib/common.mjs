@@ -74,3 +74,33 @@ export async function pool(items, n, fn) {
   }));
   return out;
 }
+
+// ---------- registrazione degli invii nello storico condiviso ----------
+const MAX_HISTORY = 100;
+/** Registra un blocco di esiti: storico per indirizzo + elenco destinatari e contatori della campagna */
+export async function logSends(campaignId, results) {
+  const sendStore = getStore("invii"), campStore = getStore("campagne");
+  const meta = await campStore.get(campaignId, { type: "json" });
+  if (!meta) return null;
+  await pool(results.filter((r) => r.status === "ok"), 20, async (r) => {
+    const k = keyOf(r.email), h = (await sendStore.get(k, { type: "json" })) || { email: normEmail(r.email), sends: [] };
+    h.sends.push({ c: campaignId, s: meta.subject, f: meta.sender, t: r.time || new Date().toISOString() });
+    h.sends = h.sends.slice(-MAX_HISTORY);
+    await sendStore.setJSON(k, h);
+  });
+  const rec = (await campStore.get(campaignId + "/destinatari", { type: "json" })) || [];
+  results.forEach((r) => rec.push({ e: normEmail(r.email), st: r.status, t: r.time, err: r.error || "", id: r.id || "" }));
+  meta.ok += results.filter((r) => r.status === "ok").length;
+  meta.ko += results.filter((r) => r.status !== "ok").length;
+  meta.updatedAt = new Date().toISOString();
+  await campStore.setJSON(campaignId + "/destinatari", rec);
+  await campStore.setJSON(campaignId, meta);
+  return meta;
+}
+
+/** Indirizzi non recapitabili (rilevati dai messaggi di mancato recapito): esclusi dagli invii futuri */
+export async function addBounced(email, campaign, by, detail) {
+  const store = getStore("nonrecapitabili"), key = keyOf(email);
+  if (await store.get(key, { type: "json" })) return;
+  await store.setJSON(key, { email: normEmail(email), date: new Date().toISOString(), campaign: campaign || "", by: by || "", detail: String(detail || "").slice(0, 200) });
+}

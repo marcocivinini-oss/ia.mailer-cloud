@@ -7,6 +7,7 @@ import { bindBlobs } from "./blobs-shim.js";
 import registro from "../netlify/functions/registro.mjs";
 import hubspot from "../netlify/functions/hubspot.mjs";
 import disiscrizione from "../netlify/functions/disiscrizione.mjs";
+import tappe from "../netlify/functions/tappe.mjs";
 import { verifyGoogle } from "../netlify/lib/common.mjs";
 
 const jsonRes = (status, obj) => new Response(JSON.stringify(obj), { status, headers: { "content-type": "application/json" } });
@@ -56,6 +57,7 @@ export default {
     }
     if (url.pathname === "/.netlify/functions/registro") return registro(request);
     if (url.pathname === "/.netlify/functions/hubspot") return hubspot(request);
+    if (url.pathname === "/.netlify/functions/tappe") return tappe(request);
     if (url.pathname === "/.netlify/functions/invia") {
       try { return await invia(request); }
       catch (e) { return jsonRes(502, { error: "Servizio Google non raggiungibile: " + (e.message || e) }); }

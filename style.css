@@ -82,3 +82,28 @@ details summary{cursor:pointer;color:var(--navy);font-weight:600}
 /* Ritorno al portale IA Advisors Hub */
 .portal-back{margin-left:auto;font-family:"Poppins",sans-serif;font-size:13px;font-weight:500;color:#131D4B;text-decoration:none;border:1px solid #D9DDE8;padding:7px 14px;white-space:nowrap}
 .portal-back:hover{border-color:#131D4B}
+
+/* Campagne graduali */
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.pair{display:flex;align-items:center;gap:6px}.pair span{color:var(--muted);font-weight:400}
+.days{display:flex;flex-wrap:wrap;gap:6px}
+.days label{flex-direction:row;align-items:center;gap:5px;border:1px solid var(--line);padding:5px 10px;font-weight:600;color:var(--navy);cursor:pointer}
+.days label:has(input:checked){background:#eef0f7;border-color:var(--navy)}
+.summary .warn{display:block;margin-top:6px;color:#9a5b00}
+.plans{display:flex;flex-direction:column;gap:12px}
+.plan{border:1px solid var(--line);padding:14px 16px;position:relative}
+.plan::before{content:"";position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:3px solid var(--orange);border-left:3px solid var(--orange)}
+.plan h3{margin:0;font-family:Poppins,Arial,sans-serif;font-size:15px;color:var(--navy);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.plan .meta{font-size:13px;color:var(--muted);margin:3px 0 8px}
+.plan .stats{font-size:14px;margin-top:6px}
+.plan .today{font-size:14px;margin-top:4px;color:var(--navy);font-weight:600}
+.plan .row{margin-top:10px}
+.badge{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;background:#eef0f7;color:var(--navy)}
+.badge.attiva{background:#e3f4ea;color:var(--ok)}.badge.in-pausa{background:#fff3df;color:#9a5b00}
+.badge.sospesa{background:#fde8e6;color:var(--err)}.badge.completata{background:var(--navy);color:#fff}
+.badge.annullata,.badge.preparazione{background:#eee;color:#777}
+.plan .progress{margin-top:8px}.plan .progress div{height:100%;background:var(--orange)}
+#planProgressBar{height:100%;width:0;background:var(--orange);transition:width .3s}
+.sessiontitle{font-family:Poppins,Arial,sans-serif;font-weight:600;color:var(--navy);margin-bottom:8px}
+.renew{margin:8px 0;padding:10px 14px;background:#fff3df;border-left:4px solid var(--orange);display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+@media (max-width:700px){.grid4{grid-template-columns:1fr 1fr}}

@@ -7,6 +7,7 @@
   const SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.settings.basic",
+    "https://www.googleapis.com/auth/gmail.metadata",
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile"
   ].join(" ");
@@ -17,7 +18,8 @@
     recipients: [], columns: [], included: new Set(),
     canvaImages: [], attachments: [], logo: null,
     results: new Map(), sending: false, paused: false, stopped: false,
-    unsub: {}, history: {}, registryOk: false, unsubList: []
+    unsub: {}, history: {}, bounced: {}, registryOk: false, unsubList: [], bouncedList: [],
+    plans: [], planCache: {}
   };
 
   // ---------- utilità ----------
@@ -129,7 +131,7 @@
     $("userBox").innerHTML = M.escapeHtml(state.user.email) + '<br><a id="lnkLogout">Esci</a>';
     $("lnkLogout").onclick = () => { try { google.accounts.oauth2.revoke(state.token, () => {}); } catch (e) {} location.reload(); };
     if (!$("testTo").value) $("testTo").value = state.user.email;
-    refreshPreview(); updateSendInfo(); loadCampaigns();
+    refreshPreview(); updateSendInfo(); loadCampaigns(); loadPlans();
   }
 
   // ---------- editor testo ----------
@@ -221,7 +223,8 @@
     if (res.optout) s += " · " + res.optout + " contatti HubSpot esclusi (disiscritti)";
     state.baseSummary = s; $("recSummary").innerHTML = s; $("recSummary").classList.remove("hidden");
     state.results = new Map();
-    state.unsub = {}; state.history = {};
+    state.unsub = {}; state.history = {}; state.bounced = {};
+    selectSendMode(res.recipients.length > 150 ? "gradual" : "now");
     renderRecipients(); refreshMergeOptions(); refreshPreview(); updateSendInfo();
     checkRegistry();
   }
@@ -240,10 +243,14 @@
   async function checkRegistry() {
     if (!state.user || !state.recipients.length) return;
     try {
-      const j = await reg("check", { emails: state.recipients.map((r) => r.email) });
-      state.unsub = j.unsubscribed || {}; state.history = j.history || {}; state.registryOk = true;
-      const nU = Object.keys(state.unsub).length, nH = Object.keys(state.history).length;
-      $("recSummary").innerHTML = state.baseSummary + (nU ? " · <b>" + nU + "</b> disiscritti esclusi" : "") +
+      const all = state.recipients.map((r) => r.email), j = { unsubscribed: {}, history: {}, bounced: {} };
+      for (let i = 0; i < all.length; i += 2000) {
+        const part = await reg("check", { emails: all.slice(i, i + 2000) });
+        Object.assign(j.unsubscribed, part.unsubscribed); Object.assign(j.history, part.history); Object.assign(j.bounced, part.bounced || {});
+      }
+      state.unsub = j.unsubscribed; state.history = j.history; state.bounced = j.bounced; state.registryOk = true;
+      const nU = Object.keys(state.unsub).length, nH = Object.keys(state.history).length, nB = Object.keys(state.bounced).length;
+      $("recSummary").innerHTML = state.baseSummary + (nU ? " · <b>" + nU + "</b> disiscritti esclusi" : "") + (nB ? " · " + nB + " non recapitabili esclusi" : "") +
         (nH ? " · " + nH + " hanno già ricevuto nostre email" : "");
     } catch (e) {
       state.registryOk = false;
@@ -254,6 +261,7 @@
   // Motivo per cui un destinatario non riceverà l'email (null = verrà inviato)
   function skipReason(r) {
     if (state.unsub[r.email]) return "disiscritto";
+    if (state.bounced[r.email]) return "non recapitabile";
     if (M.isExcluded(r.email, $("exclusions").value)) return "escluso";
     const h = state.history[r.email];
     if (h) {
@@ -415,7 +423,7 @@
     const opts = { method: "POST", headers: { "Content-Type": "message/rfc822" }, body: mime };
     for (let attempt = 0; attempt < 4; attempt++) {
       const r = await gfetch(url, opts);
-      if (r.ok) return (await r.json()).id;
+      if (r.ok) { const j = await r.json(); return { id: j.id, threadId: j.threadId }; }
       const j = await r.json().catch(() => ({}));
       const reason = (j.error && (j.error.message || (j.error.errors && j.error.errors[0] && j.error.errors[0].reason))) || "HTTP " + r.status;
       if (/limit exceeded|quota|daily/i.test(reason) && r.status !== 429) { const e = new Error("Limite giornaliero di invio raggiunto"); e.fatal = true; throw e; }
@@ -437,6 +445,7 @@
   };
 
   function updateSendInfo() {
+    updateEstimate();
     const n = queue().length;
     $("btnSend").disabled = !n || !state.user || state.sending;
     $("btnSend").textContent = n ? "Invia a " + n + " destinatari" : "Invia a tutti";
@@ -444,7 +453,8 @@
     const mins = Math.ceil(n * ((C.SEND_DELAY_MS || 1500) + 600) / 60000);
     const skipped = state.recipients.filter((r) => skipReason(r)).length;
     $("sendInfo").innerHTML = (skipped ? skipped + " destinatari esclusi (disiscritti, esclusioni o già contattati). " : "") + "<b>" + n + "</b> email personalizzate, una per destinatario (nessuno vede gli altri indirizzi). Tempo stimato: circa " + mins +
-      " min. Tieni aperta questa pagina durante l'invio. Limite Google Workspace: 2.000 email al giorno per casella.";
+      " min. Tieni aperta questa pagina durante l'invio. Limite Google Workspace: 2.000 email al giorno per casella." +
+      (n > 300 ? '<br><b>Per una lista di questa dimensione è consigliata la modalità «Graduale, a tappe».</b>' : "");
   }
 
   function log(line, cls) {
@@ -469,8 +479,8 @@
       const r = list[i];
       try {
         const fields = Object.assign({}, r.fields, { __unsubUrl: links && links[r.email] });
-        const id = await sendOne(buildMessage(fields, r.email));
-        const res = { status: "ok", id, time: new Date().toISOString() };
+        const g = await sendOne(buildMessage(fields, r.email));
+        const res = { status: "ok", id: g.id, threadId: g.threadId, time: new Date().toISOString() };
         state.results.set(r.email, res); pending.push(Object.assign({ email: r.email }, res)); ok++; log("✓ " + r.email, "ok");
       } catch (e) {
         const res = { status: "error", error: e.message, time: new Date().toISOString() };
@@ -579,6 +589,376 @@
     try { const j = await reg("unsubscribe-add", { emails }); toast(j.added + " indirizzi segnati come disiscritti"); $("unsubAdd").value = ""; loadUnsubs(); checkRegistry(); }
     catch (e) { toast(e.message, true); }
   };
+
+
+  // =====================================================================
+  // ---------- campagne graduali ("a tappe") ----------
+  // =====================================================================
+  const TZS = [["Europe/Rome", "Italia"], ["Europe/Madrid", "Spagna"], ["Europe/London", "Regno Unito"], ["America/New_York", "USA – costa est"],
+    ["America/Chicago", "USA – centro"], ["America/Los_Angeles", "USA – costa ovest"], ["America/Mexico_City", "Messico"], ["America/Sao_Paulo", "Brasile"],
+    ["America/Argentina/Buenos_Aires", "Argentina"], ["Asia/Dubai", "Emirati Arabi"], ["Asia/Bangkok", "Thailandia / Sud-est asiatico"]];
+  const DAYN = ["", "Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
+  const domainOf = (e) => String(e).split("@")[1] || "";
+  const CONSUMER = /^(gmail|googlemail|yahoo|ymail|hotmail|outlook|live|msn|icloud|me|mac|aol|libero|virgilio|alice|tim|tin|tiscali|fastwebnet|email|inwind|iol|gmx|web|protonmail|proton|yandex|mail|qq|163|126|uol|bol|terra|zoho)\.(com|net|it|de|fr|es|co\.uk|uk|com\.br|br|com\.ar|ar|com\.mx|mx|ru|cn|ch|at|be|nl|ca|jp|eu|me)$/i;
+  const isConsumer = (d) => CONSUMER.test(d);
+  function interleave(list, dom) {
+    const groups = new Map();
+    list.forEach((x) => { const d = dom(x); if (!groups.has(d)) groups.set(d, []); groups.get(d).push(x); });
+    const gs = [...groups.values()], out = [];
+    while (out.length < list.length) gs.forEach((g) => { if (g.length) out.push(g.shift()); });
+    return out;
+  }
+  function nowIn(tz, d) {
+    const p = {};
+    new Intl.DateTimeFormat("en-GB", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23", weekday: "short" })
+      .formatToParts(d || new Date()).forEach((x) => (p[x.type] = x.value));
+    return { date: p.year + "-" + p.month + "-" + p.day, hm: p.hour + ":" + p.minute, wd: { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 }[p.weekday] };
+  }
+  const addDay = (date) => { const d = new Date(date + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); };
+  const fmtDay = (date) => { try { return new Date(date + "T12:00:00Z").toLocaleDateString("it-IT", { weekday: "short", day: "numeric", month: "short" }); } catch (e) { return date; } };
+  const rand = (a, b) => a + Math.random() * (b - a);
+
+  // Timer che continuano anche con la scheda in secondo piano (il browser rallenta i timer normali)
+  const bgSleep = (() => {
+    try {
+      const w = new Worker(URL.createObjectURL(new Blob(["onmessage=function(e){setTimeout(function(){postMessage(e.data.id)},e.data.ms)}"], { type: "text/javascript" })));
+      const waits = new Map(); let n = 0;
+      w.onmessage = (e) => { const f = waits.get(e.data); waits.delete(e.data); if (f) f(); };
+      return (ms) => new Promise((r) => { const id = ++n; waits.set(id, r); w.postMessage({ id, ms }); });
+    } catch (e) { return sleep; }
+  })();
+
+  // ---- impostazioni ----
+  $("gTz").innerHTML = TZS.map(([v, l]) => '<option value="' + v + '">' + l + "</option>").join("");
+  $("gDays").innerHTML = [1, 2, 3, 4, 5, 6, 7].map((d) => '<label><input type="checkbox" value="' + d + '"' + (d <= 5 ? " checked" : "") + "> " + DAYN[d] + "</label>").join("");
+  const G = { start: "gStart", step: "gStep", max: "gMax", perDomain: "gPerDomain", winStart: "gWinStart", winEnd: "gWinEnd", tz: "gTz", gapMin: "gGapMin", gapMax: "gGapMax" };
+  (function restoreSettings() {
+    const saved = store.get("gradual.settings", null); if (!saved) return;
+    Object.entries(G).forEach(([k, id]) => { if (saved[k] != null) $(id).value = saved[k]; });
+    if (Array.isArray(saved.days)) $("gDays").querySelectorAll("input").forEach((c) => (c.checked = saved.days.includes(+c.value)));
+  })();
+  function readSettings() {
+    // stessi limiti applicati dal server
+    const n = (id, min, max, d) => { const v = Math.round(+$(id).value); return Number.isFinite(v) && $(id).value !== "" ? Math.min(max, Math.max(min, v)) : d; };
+    const s = { start: n("gStart", 5, 1500, 50), step: n("gStep", 0, 500, 25), max: n("gMax", 5, 1500, 200), perDomain: n("gPerDomain", 1, 100, 2),
+      winStart: $("gWinStart").value || "09:00", winEnd: $("gWinEnd").value || "17:30", tz: $("gTz").value || "Europe/Rome",
+      days: [...$("gDays").querySelectorAll("input:checked")].map((c) => +c.value),
+      gapMin: n("gGapMin", 2, 600, 6), gapMax: n("gGapMax", 2, 900, 15), pauseEvery: 25 };
+    if (s.start > s.max) s.start = s.max;
+    if (s.gapMax < s.gapMin) s.gapMax = s.gapMin;
+    return s;
+  }
+  function settingsProblem(s) {
+    if (!s.days.length) return "Scegli almeno un giorno di invio";
+    if (s.winEnd <= s.winStart) return "L'orario di fine deve essere successivo a quello di inizio";
+    if (s.max > 1500) return "Massimo 1.500 email al giorno (il limite di Google Workspace è 2.000, comprese le email normali)";
+    return null;
+  }
+  Object.values(G).forEach((id) => $(id).addEventListener("change", () => { store.set("gradual.settings", readSettings()); updateEstimate(); }));
+  $("gDays").addEventListener("change", () => { store.set("gradual.settings", readSettings()); updateEstimate(); });
+  function selectSendMode(mode) {
+    const tab = document.querySelector('[data-group="sendmode"] [data-tab="' + mode + '"]'); if (tab) tab.click();
+  }
+
+  // ---- stima: simula le tappe con quote crescenti, giorni, fascia oraria e tetti per azienda ----
+  function simulateClient(doms, s) {
+    let pend = doms.slice(), t = nowIn(s.tz), date = t.date, wd = t.wd, k = 1, last = null, sendDays = 0, firstQuota = 0, maxDuration = 0;
+    for (let i = 0; i < 1000 && pend.length; i++) {
+      let took = 0;
+      if (s.days.includes(wd) && !(i === 0 && t.hm >= s.winEnd)) {
+        const quota = Math.min(s.max, s.start + s.step * (k - 1)), cnt = {}, keep = [];
+        pend.forEach((d) => { if (took < quota && (isConsumer(d) || (cnt[d] || 0) < s.perDomain)) { cnt[d] = (cnt[d] || 0) + 1; took++; } else keep.push(d); });
+        if (took) { pend = keep; last = date; sendDays++; k++; if (!firstQuota) firstQuota = { date, n: took }; maxDuration = Math.max(maxDuration, took); }
+      }
+      date = addDay(date); wd = (wd % 7) + 1;
+    }
+    return { eta: pend.length ? null : last, sendDays, first: firstQuota, maxPerDay: maxDuration };
+  }
+  function updateEstimate() {
+    const box = $("gEstimate"), list = queue(), s = readSettings(), prob = settingsProblem(s);
+    $("btnPlan").disabled = !list.length || !state.user || state.sending || !!prob;
+    if (prob) { box.innerHTML = '<span class="warn">' + M.escapeHtml(prob) + "</span>"; return; }
+    if (!list.length) { box.textContent = "Carica i destinatari per vedere la durata della campagna."; return; }
+    const doms = interleave(list.map((r) => domainOf(r.email)), (d) => d), sim = simulateClient(doms, s);
+    const avg = (s.gapMin + s.gapMax) / 2 + 1.5, longest = Math.ceil((sim.maxPerDay * avg + Math.floor(sim.maxPerDay / 25) * 67) / 60);
+    const counts = {}; list.forEach((r) => { const d = domainOf(r.email); if (!isConsumer(d)) counts[d] = (counts[d] || 0) + 1; });
+    const big = Object.entries(counts).filter(([, n]) => n > 10).sort((a, b) => b[1] - a[1]);
+    const daysTxt = s.days.map((d) => DAYN[d]).join(", "), tzTxt = (TZS.find((x) => x[0] === s.tz) || [0, s.tz])[1];
+    box.innerHTML = "<b>" + list.length + "</b> destinatari · " + s.start + " email il primo giorno, poi +" + s.step + " al giorno fino a " + s.max +
+      " · " + daysTxt + " " + s.winStart + "–" + s.winEnd + " (ora " + M.escapeHtml(tzTxt) + ")<br>" +
+      (sim.eta ? "<b>" + sim.sendDays + "</b> tappe · prima tappa " + fmtDay(sim.first.date) + " · fine prevista <b>" + fmtDay(sim.eta) + "</b>" : "Durata superiore a un anno: aumenta le quote") +
+      " · la tappa più lunga dura " + (longest <= 1 ? "<b>circa un minuto</b>" : "circa <b>" + longest + " minuti</b>") + " (tieni aperta la pagina)" +
+      (big.length ? '<span class="warn">' + big.length + (big.length === 1 ? " azienda ha" : " aziende hanno") + " più di 10 contatti (" +
+        big.slice(0, 3).map(([d, n]) => M.escapeHtml(d) + ": " + n).join(", ") + "): con " + s.perDomain + " email al giorno per azienda allungano la campagna. Se sono reparti diversi puoi alzare il limite per azienda.</span>" : "");
+  }
+
+  // ---- chiamate al server ----
+  async function tp(action, payload) {
+    const token = await getToken();
+    const r = await fetch("/.netlify/functions/tappe", {
+      method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify(Object.assign({ action }, payload || {}))
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "Server non raggiungibile (" + r.status + ")");
+    return j;
+  }
+  async function tpRaw(method, azione, id, body) {
+    const token = await getToken();
+    const r = await fetch("/.netlify/functions/tappe?azione=" + azione + "&id=" + encodeURIComponent(id), {
+      method, headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body
+    });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || "Errore " + r.status); }
+    return r.json();
+  }
+
+  // ---- il messaggio viene fissato alla creazione: le modifiche successive all'editor non cambiano la campagna ----
+  function snapshot() {
+    const o = composeOpts();
+    return {
+      v: 1, subject: $("subject").value, fromName: $("fromName").value.trim(), replyTo: $("replyTo").value.trim(),
+      opts: Object.assign({}, o, { logoCid: null, canvaImages: state.canvaImages.map((im) => ({ cid: im.cid, mime: im.mime, b64: im.b64, name: im.name, link: im.link, alt: im.alt })) }),
+      attachments: state.attachments.map((a) => ({ name: a.name, mime: a.mime, size: a.size, b64: a.b64 }))
+    };
+  }
+  function fromSnapshot(snap, fields, to) {
+    const o = Object.assign({}, snap.opts, { logoCid: state.logo ? "ialogo@ia" : null });
+    const html = M.buildEmailHtml(o, fields), inline = [];
+    if (o.useTemplate && state.logo) inline.push({ cid: "ialogo@ia", mime: "image/png", b64: state.logo, name: "logo-ia.png" });
+    if (o.mode === "canva") (o.canvaImages || []).forEach((im) => inline.push({ cid: im.cid, mime: im.mime, b64: im.b64, name: im.name }));
+    return { fromName: snap.fromName, fromEmail: o.fromEmail, to, replyTo: snap.replyTo, unsubUrl: fields.__unsubUrl,
+      subject: M.merge(snap.subject, fields, false).trim(), html, text: M.htmlToText(html), inline, attachments: snap.attachments || [] };
+  }
+
+  // ---- creazione ----
+  $("btnPlan").onclick = async () => {
+    const err = validate(); if (err) return toast(err, true);
+    const list = queue(); if (!list.length) return toast("Nessun destinatario da inviare", true);
+    const s = readSettings(), prob = settingsProblem(s); if (prob) return toast(prob, true);
+    if (!state.registryOk && !confirm("Il registro condiviso non è raggiungibile: disiscritti e storico non sono stati verificati. Procedere comunque?")) return;
+    const sim = simulateClient(interleave(list.map((r) => domainOf(r.email)), (d) => d), s);
+    if (!confirm("Creare la campagna graduale?\n\nOggetto: " + $("subject").value.trim() + "\nDa: " + $("fromAddress").value + "\nDestinatari: " + list.length +
+      "\nTappe: " + s.start + " email il primo giorno, poi +" + s.step + " al giorno fino a " + s.max +
+      "\nGiorni: " + s.days.map((d) => DAYN[d]).join(", ") + ", " + s.winStart + "–" + s.winEnd +
+      "\nFine prevista: " + (sim.eta ? fmtDay(sim.eta) + " (" + sim.sendDays + " tappe)" : "oltre un anno") +
+      "\n\nIl messaggio viene fissato adesso: le modifiche successive all'editor non cambiano questa campagna.")) return;
+    saveSender();
+    const btn = $("btnPlan"); btn.disabled = true; btn.textContent = "Creazione in corso…";
+    try {
+      const ordered = interleave(list, (r) => domainOf(r.email));
+      const j = await tp("crea", { campaign: { subject: $("subject").value.trim(), sender: $("fromAddress").value, fromName: $("fromName").value.trim(), mode: state.mode, source: state.source },
+        settings: s, recipients: ordered.map((r) => r.email) });
+      const id = j.plan.id;
+      await tpRaw("PUT", "contenuto", id, JSON.stringify(snapshot()));
+      await tpRaw("PUT", "campi", id, JSON.stringify(Object.fromEntries(ordered.map((r) => [r.email, r.fields]))));
+      await tp("stato", { id, status: "attiva" });
+      toast("Campagna graduale creata: " + list.length + " destinatari");
+      await loadPlans();
+      $("sec-plans").scrollIntoView({ behavior: "smooth" });
+    } catch (e) { toast("Creazione non riuscita: " + e.message, true); loadPlans(); }
+    btn.textContent = "Crea campagna graduale"; updateEstimate();
+  };
+
+  // ---- elenco ----
+  const STATUS = { attiva: "Attiva", "in pausa": "In pausa", sospesa: "Sospesa", completata: "Completata", annullata: "Annullata", preparazione: "Incompleta" };
+  async function loadPlans() {
+    if (!state.user) return;
+    try { state.plans = (await tp("elenco")).plans || []; renderPlans(); }
+    catch (e) { $("planList").innerHTML = '<p class="muted">' + M.escapeHtml(e.message) + "</p>"; }
+  }
+  function renderPlans() {
+    const box = $("planList");
+    if (!state.plans.length) { box.innerHTML = '<p class="muted">Nessuna campagna graduale. Creala dalla sezione 4, scegliendo «Graduale, a tappe».</p>'; return; }
+    box.innerHTML = state.plans.map((p) => {
+      const c = p.counts || {}, s = p.s || {}, sent = (c.ok || 0) + (c.bounce || 0), done = (c.total || 0) - (c.pending || 0);
+      const pct = c.total ? Math.round(done / c.total * 100) : 0, bpct = sent ? Math.round((c.bounce || 0) / sent * 1000) / 10 : 0;
+      const stats = ["Inviate <b>" + sent + "</b> di " + c.total, c.pending ? "in coda " + c.pending : "", c.reply ? "<b>risposte " + c.reply + "</b>" : "",
+        c.auto ? "risposte automatiche " + c.auto : "", c.bounce ? "non recapitate " + c.bounce + " (" + String(bpct).replace(".", ",") + "%)" : "",
+        c.unsub ? "disiscritti " + c.unsub : "", c.norec ? "esclusi perché non recapitabili " + c.norec : "", c.err ? "errori " + c.err : ""].filter(Boolean).join(" · ");
+      const today = p.status === "attiva" && p.today ? p.today.message + (p.eta ? " · fine prevista " + fmtDay(p.eta) : "") : (p.reason ? M.escapeHtml(p.reason) : "");
+      const b = (a, label, primary, dis) => '<button class="btn' + (primary ? " primary" : "") + '" data-a="' + a + '" data-id="' + p.id + '"' + (dis ? " disabled" : "") + ">" + label + "</button>";
+      let btns = "";
+      if (p.mine) {
+        if (p.status === "attiva") btns = b("run", "Invia la tappa di oggi", true, !(p.today && p.today.open) || state.sending) + b("inbox", "Controlla risposte e recapiti") + b("pause", "Pausa");
+        if (p.status === "in pausa" || p.status === "sospesa") btns = b("resume", "Riprendi", true) + b("inbox", "Controlla risposte e recapiti");
+        if (c.err && p.status !== "annullata") btns += b("retry", "Rimetti in coda gli errori (" + c.err + ")");
+      }
+      btns += b("report", "Report CSV");
+      if (p.mine && !["completata", "annullata"].includes(p.status)) btns += b("cancel", p.status === "preparazione" ? "Elimina" : "Annulla");
+      return '<div class="plan"><h3>' + M.escapeHtml(p.subject || "(senza oggetto)") + ' <span class="badge ' + p.status.replace(" ", "-") + '">' + (STATUS[p.status] || p.status) + "</span>" +
+        (p.running ? ' <span class="badge">invio in corso</span>' : "") + "</h3>" +
+        '<div class="meta">da ' + M.escapeHtml(p.sender) + " · creata il " + fmtDate(p.createdAt) + " · " + s.start + "→" + s.max + " al giorno, max " + s.perDomain +
+        " per azienda · " + (s.days || []).map((d) => DAYN[d]).join(" ") + " " + s.winStart + "–" + s.winEnd + "</div>" +
+        '<div class="progress"><div style="width:' + pct + '%"></div></div><div class="stats">' + stats + "</div>" +
+        (today ? '<div class="today">' + today + "</div>" : "") + '<div class="row">' + btns + "</div></div>";
+    }).join("");
+  }
+  $("btnLoadPlans").onclick = loadPlans;
+  $("planList").addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-a]"); if (!btn) return;
+    const id = btn.dataset.id, a = btn.dataset.a, p = state.plans.find((x) => x.id === id) || {};
+    if (a === "run") return runPlan(id);   // nessuna attesa prima: il clic può aprire la finestra di Google
+    try {
+      if (a === "pause") await tp("stato", { id, status: "in pausa" });
+      if (a === "resume") {
+        if (p.status === "sospesa" && !confirm("La campagna è stata sospesa: " + (p.reason || "") + "\n\nHai controllato la lista? Riprendere comunque?")) return;
+        await tp("stato", { id, status: "attiva" });
+      }
+      if (a === "cancel" && confirm(p.status === "preparazione" ? "Eliminare questa campagna incompleta?" : "Annullare la campagna? I destinatari non ancora raggiunti non riceveranno l'email.")) await tp("stato", { id, status: "annullata" });
+      if (a === "retry") { const j = await tp("riprova", { id }); toast(j.requeued + " destinatari rimessi in coda"); }
+      if (a === "inbox") { await checkPlanInbox(id, false); }
+      if (a === "report") await planReport(p);
+    } catch (err) { toast(err.message, true); }
+    loadPlans();
+  });
+
+  async function planReport(p) {
+    const j = await tp("report", { id: p.id });
+    let campi = {};
+    if (p.mine) { try { campi = (state.planCache[p.id] && state.planCache[p.id].campi) || await tpRaw("GET", "campi", p.id); } catch (e) { /* senza nomi */ } }
+    const ESITO = ["In coda", "Inviata", "Errore", "Disiscritto", "Non recapitata", "Esclusa (non recapitabile)"], RISP = ["", "Risposta", "Risposta automatica"];
+    downloadCsv(j.recipients.map((r) => {
+      const f = campi[r.e] || {};
+      return { Email: r.e, Nome: f.Nome || "", Cognome: f.Cognome || "", Azienda: f.Azienda || "", Esito: ESITO[r.st] || "", Risposta: RISP[r.r] || "", DataOra: r.t || "", Dettaglio: r.err || "" };
+    }), "campagna-graduale-" + p.createdAt.slice(0, 10) + ".csv");
+  }
+
+  // ---- controllo della casella: risposte e mancati recapiti ----
+  function plog(line, cls) {
+    const d = document.createElement("div"); d.className = cls || ""; d.textContent = new Date().toLocaleTimeString("it-IT") + "  " + line;
+    $("planLog").prepend(d);
+  }
+  async function checkPlanInbox(id, quiet) {
+    try {
+      const j = await tp("recapiti", { id });
+      if (j.needScope) {
+        if (!state.scopeWarned) { state.scopeWarned = true; plog(j.message, "err"); toast(j.message, true); }
+        return j;
+      }
+      const msg = "Controllo casella: " + j.bounces.length + " nuovi non recapitati, " + j.replies + " nuove risposte" + (j.autos ? ", " + j.autos + " risposte automatiche" : "");
+      plog(msg, j.bounces.length ? "err" : ""); if (!quiet) toast(msg);
+      if (j.suspended) { plog("Campagna sospesa: " + j.plan.reason, "err"); toast("Campagna sospesa: " + j.plan.reason, true); }
+      return j;
+    } catch (e) { plog("Controllo casella non riuscito: " + e.message, "err"); if (!quiet) toast(e.message, true); return null; }
+  }
+
+  // ---- invio della tappa di oggi ----
+  let renewResolve = null;
+  $("btnRenew").onclick = () => {
+    getToken("").then(() => { $("renewBox").classList.add("hidden"); document.title = state.title; if (renewResolve) { renewResolve(); renewResolve = null; } })
+      .catch(() => toast("Accesso a Google non rinnovato", true));
+  };
+  function waitRenew() {
+    $("renewBox").classList.remove("hidden"); document.title = "⏸ Azione richiesta — IA Mailer";
+    plog("Accesso Google in scadenza: premi «Rinnova accesso e continua»", "err");
+    return new Promise((res) => { renewResolve = res; });
+  }
+  async function waitMs(ms) {
+    const end = Date.now() + ms;
+    while (Date.now() < end && !state.stopped) await bgSleep(Math.min(1000, end - Date.now()));
+  }
+  $("btnPlanPause").onclick = () => { state.paused = !state.paused; $("btnPlanPause").textContent = state.paused ? "Riprendi" : "Pausa"; plog(state.paused ? "In pausa" : "Ripresa"); };
+  $("btnPlanStop").onclick = () => { if (confirm("Interrompere la tappa? Le email non ancora inviate partiranno alla prossima tappa.")) { state.stopped = true; if (renewResolve) { renewResolve(); renewResolve = null; } } };
+
+  function runPlan(id) {
+    if (state.sending) return toast("C'è già un invio in corso in questa pagina", true);
+    // siamo ancora nel clic: se l'accesso Google scade a breve lo rinnoviamo subito (la finestra di Google può aprirsi)
+    const renew = !state.token || Date.now() > state.tokenExp - 15 * 60e3 ? getToken("") : Promise.resolve();
+    renew.then(() => runPlanSession(id), () => toast("Accesso a Google non rinnovato", true));
+  }
+  async function runPlanSession(id) {
+    const p = state.plans.find((x) => x.id === id) || {};
+    state.sending = true; state.paused = false; state.stopped = false; state.title = document.title;
+    $("planSession").classList.remove("hidden"); $("planLog").innerHTML = ""; $("planProgressBar").style.width = "0";
+    $("planSessionTitle").textContent = "Tappa di oggi — " + (p.subject || ""); $("planProgressText").textContent = "Preparazione…";
+    $("btnPlanPause").textContent = "Pausa"; ["btnPlanPause", "btnPlanStop"].forEach((x) => $(x).classList.remove("hidden"));
+    renderPlans(); updateEstimate();
+    $("planSession").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    let session = null, okN = 0, koN = 0, consec = 0, note = "", wake = null;
+    const pending = [];
+    const flush = async (final) => {
+      if (!session) return;
+      const batch = pending.splice(0);
+      try { await tp("esito", { id, session, results: batch, final: !!final }); }
+      catch (e) { pending.unshift.apply(pending, batch); plog("Registro non aggiornato, nuovo tentativo al prossimo blocco: " + e.message, "err"); if (final) throw e; }
+    };
+    try {
+      if (!state.planCache[id]) {
+        plog("Caricamento del messaggio e dei destinatari…");
+        state.planCache[id] = { snap: await tpRaw("GET", "contenuto", id), campi: await tpRaw("GET", "campi", id) };
+      }
+      const cache = state.planCache[id];
+      plog("Controllo risposte e mancati recapiti…");
+      const rc = await checkPlanInbox(id, true);
+      if (rc && rc.suspended) { note = "Campagna sospesa per troppi mancati recapiti"; return; }
+      const L = await tp("lotto", { id, session: Math.random().toString(36).slice(2) });
+      if (!L.batch.length) { note = L.message; plog(L.message); return; }
+      session = L.session;
+      plog("Tappa " + L.dayIndex + ": " + L.batch.length + " email (già inviate oggi " + L.sentToday + " su " + L.quota + ")");
+      try { if (navigator.wakeLock) wake = await navigator.wakeLock.request("screen"); } catch (e) { /* non supportato */ }
+      for (let i = 0; i < L.batch.length; i++) {
+        while (state.paused && !state.stopped) await bgSleep(300);
+        if (state.stopped) { note = "Tappa interrotta: le email rimanenti partiranno alla prossima tappa"; break; }
+        if (nowIn(L.tz).hm >= L.winEnd) { note = "Fascia oraria terminata alle " + L.winEnd + ": si riprende alla prossima tappa"; break; }
+        if (Date.now() > state.tokenExp - 60e3) { await waitRenew(); if (state.stopped) { note = "Tappa interrotta"; break; } }
+        const x = L.batch[i];
+        const fields = Object.assign({ Email: x.email }, cache.campi[x.email] || {}, { __unsubUrl: x.unsubUrl });
+        try {
+          const g = await sendOne(fromSnapshot(cache.snap, fields, x.email));
+          pending.push({ email: x.email, status: "ok", id: g.id, threadId: g.threadId, time: new Date().toISOString() });
+          okN++; consec = 0; plog("✓ " + x.email, "ok");
+        } catch (e) {
+          if (e.fatal) { note = "Google ha segnalato il limite giornaliero della casella: si riprende domani"; plog("✕ " + e.message, "err"); break; }
+          pending.push({ email: x.email, status: "error", error: e.message, time: new Date().toISOString() });
+          koN++; plog("✕ " + x.email + " — " + e.message, "err");
+          if (++consec >= 5) {
+            note = "5 errori di invio consecutivi: campagna messa in pausa";
+            await flush(); await tp("stato", { id, status: "in pausa", reason: "5 errori di invio consecutivi (ultimo: " + e.message + ")" });
+            break;
+          }
+        }
+        $("planProgressBar").style.width = Math.round((i + 1) / L.batch.length * 100) + "%";
+        $("planProgressText").textContent = (i + 1) + " di " + L.batch.length + " · inviate " + okN + (koN ? " · errori " + koN : "");
+        if (pending.length >= 10) await flush();
+        if ((i + 1) % 50 === 0 && i < L.batch.length - 1) {
+          await flush();
+          const r2 = await checkPlanInbox(id, true);
+          if (r2 && r2.suspended) { note = "Campagna sospesa per troppi mancati recapiti"; break; }
+        }
+        if (i < L.batch.length - 1) {
+          let ms = rand(L.gap[0], L.gap[1]) * 1000;
+          if (L.pauseEvery && (i + 1) % L.pauseEvery === 0) { ms += rand(45, 90) * 1000; plog("Pausa più lunga: " + Math.round(ms / 1000) + " secondi"); }
+          await waitMs(ms);
+        }
+      }
+    } catch (e) { note = e.message; plog("Errore: " + e.message, "err"); }
+    finally {
+      try { await flush(true); } catch (e) { toast("Esiti non registrati: " + e.message + ". Non ripetere la tappa prima di aver ricaricato la pagina.", true); }
+      try { if (wake) await wake.release(); } catch (e) { /* già rilasciato */ }
+      state.sending = false; $("renewBox").classList.add("hidden"); document.title = state.title;
+      ["btnPlanPause", "btnPlanStop"].forEach((x) => $(x).classList.add("hidden"));
+      const msg = (session ? "Tappa conclusa: " + okN + " email inviate" + (koN ? ", " + koN + " errori" : "") + (note ? ". " + note : "") : note) || "Nessun invio";
+      $("planProgressText").textContent = msg; plog(msg); toast(msg, !!(koN && !okN));
+      loadPlans(); updateSendInfo();
+    }
+  }
+
+  // ---- non recapitabili (registro) ----
+  async function loadBounced() {
+    if (!state.user) return toast("Accedi prima con Google", true);
+    try {
+      state.bouncedList = (await reg("nonrecapitabili")).bounced || [];
+      $("bouncedTable").innerHTML = "<tr><th>Email</th><th>Data</th><th>Rilevato da</th><th></th></tr>" + (state.bouncedList.length ? state.bouncedList.slice(0, 1000).map((u) =>
+        "<tr><td>" + M.escapeHtml(u.email) + "</td><td>" + fmtDate(u.date) + "</td><td>" + M.escapeHtml(u.by || "") + '</td><td><button class="btn" data-e="' + M.escapeHtml(u.email) + '">Riattiva</button></td></tr>').join("")
+        : '<tr><td colspan="4" class="muted">Nessun indirizzo non recapitabile</td></tr>');
+      $("bouncedTable").querySelectorAll("button").forEach((b) => b.onclick = async () => {
+        if (!confirm("Riattivare " + b.dataset.e + "? Fallo solo se sei sicuro che l'indirizzo sia corretto.")) return;
+        try { await reg("nonrecapitabili-remove", { email: b.dataset.e }); toast("Indirizzo riattivato"); loadBounced(); checkRegistry(); } catch (e) { toast(e.message, true); }
+      });
+    } catch (e) { toast(e.message, true); }
+  }
+  $("btnLoadBounced").onclick = loadBounced;
+  document.querySelector('[data-group="registry"] [data-tab="bounced"]').addEventListener("click", () => { if (!state.bouncedList.length) loadBounced(); });
 
   // ---------- avvio ----------
   fetch("assets/logo-email.png").then((r) => r.blob()).then((b) => new Promise((res) => {
