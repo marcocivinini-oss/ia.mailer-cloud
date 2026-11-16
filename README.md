@@ -26,3 +26,5 @@ Per le liste grandi: si carica il CSV completo e il Mailer lo invia in più gior
 - Prima di ogni tappa (e ogni 50 invii) il server legge solo le intestazioni dei messaggi in arrivo collegati alla campagna
   (permesso Google `gmail.metadata`): segna risposte e risposte automatiche, registra i non recapitabili
   (archivio `nonrecapitabili`, esclusi da tutti gli invii futuri) e sospende la campagna oltre il 5% di mancati recapiti.
+- Una campagna sospesa si riprende con «Riprendi: conta solo i nuovi invii» (il 5% vale solo per le email inviate dopo la ripresa)
+  oppure con «Riprendi senza limite» (nessuna sospensione automatica; il limite si può riattivare dalla scheda della campagna).

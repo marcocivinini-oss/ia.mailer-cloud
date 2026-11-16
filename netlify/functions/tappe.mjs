@@ -111,6 +111,22 @@ function countRecs(recs) {
   return c;
 }
 
+/** Limite dei mancati recapiti (5%). Dopo una ripresa forzata si contano solo le email inviate da quel momento
+ *  (bounceGuard.mode "nuovi"), oppure il limite è disattivato per la campagna (mode "off").
+ *  Restituisce i numeri se il limite è superato, altrimenti null. */
+function bounceOver(meta, recs) {
+  const g = meta.bounceGuard || null;
+  if (g && g.mode === "off") return null;
+  const since = g && g.mode === "nuovi" ? String(g.at || "") : "";
+  let sent = 0, bounce = 0;
+  for (const r of recs) {
+    if (r[2] !== ST.OK && r[2] !== ST.BOUNCE) continue;
+    if (since && String(r[3] || "") < since) continue;   // inviata prima della ripresa
+    sent++; if (r[2] === ST.BOUNCE) bounce++;
+  }
+  return sent >= BOUNCE_MIN_SENT && bounce / sent > BOUNCE_LIMIT ? { sent, bounce, since } : null;
+}
+
 /** Situazione di oggi (per l'elenco campagne e per il messaggio del lotto) */
 function todayInfo(meta, now = new Date()) {
   const s = meta.s, t = nowIn(s.tz, now), k = dayIndex(meta, t.date);
@@ -299,9 +315,25 @@ export default async (req) => {
           const store = rawStore("tappe");
           if (!(await store.get(meta.id + "/contenuto")) || !(await store.get(meta.id + "/campi"))) return json(409, { error: "Contenuto non caricato: ricrea la campagna" });
         }
+        // Ripresa di una campagna sospesa per mancati recapiti: i mancati recapiti già registrati non la bloccano più.
+        // "nuovi" = il limite del 5% vale solo per le email inviate da adesso; "off" = nessun limite per questa campagna.
+        if (to === "attiva" && meta.status === "sospesa") {
+          meta.bounceGuard = { mode: body.bounceGuard === "off" ? "off" : "nuovi", at: new Date().toISOString(), by: user };
+        }
         meta.status = to; meta.reason = to === "in pausa" ? String(body.reason || "Messa in pausa da " + user).slice(0, 300) : "";
         if (to !== "attiva") meta.lock = null;
         if (to === "attiva") meta.eta = simulate(meta, recs);
+        await savePlan(meta);
+        return json(200, { plan: publicMeta(meta, user) });
+      }
+
+      // Riattiva (o disattiva) il limite dei mancati recapiti; riattivato, vale per le email inviate da adesso
+      case "limite": {
+        const { meta } = await loadPlan(body.id);
+        if (!meta) return json(404, { error: "Campagna non trovata" });
+        if (meta.owner !== user) return json(403, { error: "Solo chi ha creato la campagna può modificarla" });
+        if (["completata", "annullata"].includes(meta.status)) return json(409, { error: "La campagna è chiusa" });
+        meta.bounceGuard = { mode: body.mode === "off" ? "off" : "nuovi", at: new Date().toISOString(), by: user };
         await savePlan(meta);
         return json(200, { plan: publicMeta(meta, user) });
       }
@@ -418,11 +450,13 @@ export default async (req) => {
           throw e;
         }
         await pool(res.bounces, 5, (e) => addBounced(e, meta.campaignId, user, "mancato recapito"));
-        const c = countRecs(recs), sent = c.ok + c.bounce;
         let suspended = false;
-        if (meta.status === "attiva" && sent >= BOUNCE_MIN_SENT && c.bounce / sent > BOUNCE_LIMIT) {
+        const over = meta.status === "attiva" ? bounceOver(meta, recs) : null;
+        if (over) {
           meta.status = "sospesa"; meta.lock = null; suspended = true;
-          meta.reason = `mancati recapiti al ${Math.round((c.bounce / sent) * 1000) / 10}% (${c.bounce} su ${sent}): controlla la qualità della lista prima di riprendere`;
+          const d = over.since ? nowIn(meta.s.tz, new Date(over.since)).date : "";
+          meta.reason = `mancati recapiti: ${String(Math.round((over.bounce / over.sent) * 1000) / 10).replace(".", ",")}% (${over.bounce} su ${over.sent}` +
+            (d ? ` tra le email inviate dalla ripresa del ${Number(d.slice(8, 10))}/${Number(d.slice(5, 7))}` : "") + `): controlla la qualità della lista prima di riprendere`;
         }
         await savePlan(meta, recs);
         return json(200, Object.assign(res, { suspended, plan: publicMeta(meta, user) }));

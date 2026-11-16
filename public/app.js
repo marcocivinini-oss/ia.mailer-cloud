@@ -775,12 +775,18 @@
       const stats = ["Inviate <b>" + sent + "</b> di " + c.total, c.pending ? "in coda " + c.pending : "", c.reply ? "<b>risposte " + c.reply + "</b>" : "",
         c.auto ? "risposte automatiche " + c.auto : "", c.bounce ? "non recapitate " + c.bounce + " (" + String(bpct).replace(".", ",") + "%)" : "",
         c.unsub ? "disiscritti " + c.unsub : "", c.norec ? "esclusi perché non recapitabili " + c.norec : "", c.err ? "errori " + c.err : ""].filter(Boolean).join(" · ");
+      const g = p.bounceGuard, gDay = g && g.at ? fmtDate(g.at) : "";
+      const guard = !g || ["completata", "annullata"].includes(p.status) ? "" : g.mode === "off"
+        ? "Limite dei mancati recapiti disattivato" + (gDay ? " dal " + gDay : "") + ": la campagna non viene più sospesa"
+        : "Limite del 5% di mancati recapiti calcolato solo sulle email inviate" + (gDay ? " dal " + gDay : " dalla ripresa");
       const today = p.status === "attiva" && p.today ? p.today.message + (p.eta ? " · fine prevista " + fmtDay(p.eta) : "") : (p.reason ? M.escapeHtml(p.reason) : "");
       const b = (a, label, primary, dis) => '<button class="btn' + (primary ? " primary" : "") + '" data-a="' + a + '" data-id="' + p.id + '"' + (dis ? " disabled" : "") + ">" + label + "</button>";
       let btns = "";
       if (p.mine) {
         if (p.status === "attiva") btns = b("run", "Invia la tappa di oggi", true, !(p.today && p.today.open) || state.sending) + b("inbox", "Controlla risposte e recapiti") + b("pause", "Pausa");
-        if (p.status === "in pausa" || p.status === "sospesa") btns = b("resume", "Riprendi", true) + b("inbox", "Controlla risposte e recapiti");
+        if (p.status === "in pausa") btns = b("resume", "Riprendi", true) + b("inbox", "Controlla risposte e recapiti");
+        if (p.status === "sospesa") btns = b("resume", "Riprendi: conta solo i nuovi invii", true) + b("resume-off", "Riprendi senza limite") + b("inbox", "Controlla risposte e recapiti");
+        if (g && g.mode === "off" && ["attiva", "in pausa"].includes(p.status)) btns += b("guard-on", "Riattiva il limite del 5%");
         if (c.err && p.status !== "annullata") btns += b("retry", "Rimetti in coda gli errori (" + c.err + ")");
       }
       btns += b("report", "Report CSV");
@@ -790,7 +796,8 @@
         '<div class="meta">da ' + M.escapeHtml(p.sender) + " · creata il " + fmtDate(p.createdAt) + " · " + s.start + "→" + s.max + " al giorno, max " + s.perDomain +
         " per azienda · " + (s.days || []).map((d) => DAYN[d]).join(" ") + " " + s.winStart + "–" + s.winEnd + "</div>" +
         '<div class="progress"><div style="width:' + pct + '%"></div></div><div class="stats">' + stats + "</div>" +
-        (today ? '<div class="today">' + today + "</div>" : "") + '<div class="row">' + btns + "</div></div>";
+        (today ? '<div class="today">' + today + "</div>" : "") + (guard ? '<div class="guard' + (g.mode === "off" ? " off" : "") + '">' + guard + "</div>" : "") +
+        '<div class="row">' + btns + "</div></div>";
     }).join("");
   }
   $("btnLoadPlans").onclick = loadPlans;
@@ -801,9 +808,18 @@
     try {
       if (a === "pause") await tp("stato", { id, status: "in pausa" });
       if (a === "resume") {
-        if (p.status === "sospesa" && !confirm("La campagna è stata sospesa: " + (p.reason || "") + "\n\nHai controllato la lista? Riprendere comunque?")) return;
-        await tp("stato", { id, status: "attiva" });
+        if (p.status === "sospesa" && !confirm("La campagna è stata sospesa: " + (p.reason || "") + "\n\nRiprendere comunque?\n\n" +
+          "I mancati recapiti già registrati non bloccheranno più la campagna: il limite del 5% verrà calcolato solo sulle email inviate da adesso in poi. " +
+          "Gli indirizzi non recapitabili restano esclusi.")) return;
+        await tp("stato", { id, status: "attiva", bounceGuard: "nuovi" });
       }
+      if (a === "resume-off") {
+        if (!confirm("Riprendere senza limite?\n\nLa campagna non verrà più sospesa per i mancati recapiti, qualunque sia la percentuale. " +
+          "Gli indirizzi non recapitabili restano comunque esclusi.\n\nAttenzione: molti mancati recapiti possono far finire le email di " + (p.sender || "questa casella") +
+          " nello spam. Potrai riattivare il limite in qualsiasi momento.")) return;
+        await tp("stato", { id, status: "attiva", bounceGuard: "off" });
+      }
+      if (a === "guard-on") { await tp("limite", { id, mode: "nuovi" }); toast("Limite del 5% riattivato: vale per le email inviate da adesso"); }
       if (a === "cancel" && confirm(p.status === "preparazione" ? "Eliminare questa campagna incompleta?" : "Annullare la campagna? I destinatari non ancora raggiunti non riceveranno l'email.")) await tp("stato", { id, status: "annullata" });
       if (a === "retry") { const j = await tp("riprova", { id }); toast(j.requeued + " destinatari rimessi in coda"); }
       if (a === "inbox") { await checkPlanInbox(id, false); }
